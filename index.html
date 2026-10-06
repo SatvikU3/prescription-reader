@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prescription Reader — Indian and US prescriptions</title>
+<meta name="description" content="Upload a photo of a handwritten Indian or US prescription and get a clear medication list with brand and generic names.">
+<meta name="theme-color" content="#E9A23B">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%23E9A23B%22/><text x=%2250%22 y=%2268%22 font-size=%2258%22 font-family=%22Georgia,serif%22 font-style=%22italic%22 font-weight=%22700%22 text-anchor=%22middle%22 fill=%22%2314213D%22>Rx</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;600&family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,650;1,9..144,500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --amber: #E9A23B;
+    --amber-deep: #A8670F;
+    --ink: #14213D;
+    --ink-soft: #46556F;
+    --page: #F2F5F8;
+    --panel: #E8EDF3;
+    --paper: #FFFFFF;
+    --line: #CFD7E2;
+    --ok: #1B7F55;
+    --warn: #A8670F;
+    --danger: #B3362B;
+    --pen: #1F3A93;
+    --display: 'Fraunces', Georgia, 'Times New Roman', serif;
+    --body: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --hand: 'Caveat', 'Bradley Hand', 'Segoe Print', cursive;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0E1624;
+      --panel: #16213A;
+      --line: #2A3855;
+      --ink-soft: #A9B6CC;
+      --ok: #4CC38A;
+      --warn: #E7B15A;
+      --danger: #F07F73;
+      --text: #E8EDF5;
+    }
+    body { color: var(--text); }
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font-family: var(--body); font-size: 1rem; line-height: 1.55;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    -webkit-text-size-adjust: 100%;
+  }
+  h1, h2, h3, h4 { font-family: var(--display); font-weight: 650; margin: 0; letter-spacing: -0.015em; }
+  p { margin: 0; }
+  a { color: inherit; }
+  :focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+  @media (prefers-color-scheme: dark) { :focus-visible { outline-color: var(--amber); } }
+  .hero :focus-visible { outline-color: var(--ink); }
+
+  .wrap { width: min(1120px, 100% - 40px); margin-inline: auto; }
+
+  /* ---------- Hero: the amber vial ---------- */
+  .hero {
+    position: relative; overflow: hidden; background: var(--amber); color: var(--ink);
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .hero::after { /* glass highlight down the side of the vial */
+    content: ""; position: absolute; top: 0; bottom: 0; right: 7%; width: 9%;
+    background: rgba(255, 255, 255, 0.14); pointer-events: none;
+  }
+  .nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; position: relative; z-index: 1; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 650; font-size: 1.15rem; text-decoration: none; }
+  .brand-mark {
+    display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px;
+    background: var(--ink); color: var(--amber); font-style: italic; font-size: 1.05rem;
+  }
+  .nav-links { display: flex; gap: 22px; font-weight: 500; font-size: 0.95rem; }
+  .nav-links a { text-decoration: none; padding: 4px 0; border-bottom: 2px solid transparent; }
+  .nav-links a:hover { border-bottom-color: var(--ink); }
+
+  .hero-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 56px; align-items: center; padding: 36px 0 84px; position: relative; z-index: 1; }
+  .hero h1 { font-size: clamp(2.5rem, 5.4vw, 4.3rem); line-height: 1.04; font-variation-settings: "opsz" 144; }
+  .hero-sub { margin-top: 22px; max-width: 48ch; font-size: 1.12rem; line-height: 1.55; }
+  .hero-actions { margin-top: 32px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font: 600 0.98rem/1 var(--body); padding: 15px 24px; border-radius: 999px; border: 2px solid var(--ink);
+    background: var(--ink); color: #fff; cursor: pointer; text-decoration: none;
+  }
+  .btn:hover:not(:disabled) { background: #0B1429; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn.quiet { background: transparent; color: var(--ink); }
+  .btn.quiet:hover:not(:disabled) { background: rgba(20, 33, 61, 0.08); }
+  .btn.small { padding: 11px 18px; font-size: 0.9rem; }
+  @media (prefers-color-scheme: dark) {
+    .tool .btn { background: var(--amber); color: #1A1204; border-color: var(--amber); }
+    .tool .btn:hover:not(:disabled) { background: #F2B455; }
+    .tool .btn.quiet { background: transparent; color: var(--text); border-color: var(--line); }
+    .tool .btn.quiet:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); }
+  }
+
+  /* Hero demo: handwriting becomes a label */
+  .demo { position: relative; padding: 8px 0; }
+  .note {
+    position: relative; transform: rotate(-2deg); margin-right: 36px;
+    background: #FFFEFB; border-radius: 4px; padding: 20px 22px 14px;
+    background-image: repeating-linear-gradient(transparent 0 35px, #D9E1EE 35px 36px);
+    background-position: 0 14px;
+  }
+  .hand-line { font-family: var(--hand); font-weight: 600; font-size: clamp(1.7rem, 3.3vw, 2.3rem); line-height: 36px; color: var(--pen); white-space: nowrap; overflow: hidden; }
+  .cap { display: block; margin-top: 10px; font-size: 0.8rem; color: #5A6780; background: #FFFEFB; }
+  .slip { margin: -10px 0 0 36px; position: relative; }
+  .caption-out { margin: 0 0 8px 40px; font-size: 0.82rem; font-weight: 500; }
+
+  @keyframes write { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+  @keyframes settle { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+  .hand-line { animation: write 2.2s steps(30, end) 0.3s both; }
+  .demo .slip, .demo .caption-out { animation: settle 0.7s ease-out 2.6s both; }
+  @media (prefers-reduced-motion: reduce) {
+    .hand-line, .demo .slip, .demo .caption-out { animation: none; }
+    html { scroll-behavior: auto; }
+  }
+
+  /* ---------- Medication label (used in hero + results) ---------- */
+  .label {
+    background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-left: 8px solid var(--ok);
+    border-radius: 14px; padding: 18px 20px 16px;
+  }
+  .label.weak { border-left-color: var(--warn); }
+  .label.none, .label.error { border-left-color: var(--danger); }
+  .label-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+  .drug { font-family: var(--display); font-weight: 650; font-size: 1.6rem; line-height: 1.15; letter-spacing: -0.015em; overflow-wrap: anywhere; }
+  .generic { margin-top: 2px; font-size: 0.95rem; color: var(--ink-soft); }
+  .generic b { font-weight: 600; color: var(--ink); }
+  .badge { flex: none; font-size: 0.76rem; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: #DDF1E8; color: #0F5A3B; text-align: right; }
+  .badge.weak { background: #FBEBCB; color: #7A4A06; }
+  .badge.none, .badge.error { background: #F8DAD6; color: #8A261D; }
+  .directions { margin-top: 14px; font-size: 1.08rem; font-weight: 500; line-height: 1.45; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px 18px; margin: 16px 0 0; }
+  .facts div { border-top: 1px solid var(--line); padding-top: 6px; }
+  .facts dt { font-size: 0.78rem; color: var(--ink-soft); }
+  .facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .missing { margin-top: 12px; font-size: 0.86rem; color: var(--danger); font-weight: 500; }
+  .from { margin-top: 14px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 0.8rem; color: var(--ink-soft); }
+  .from q { font-family: var(--hand); font-weight: 600; font-size: 1.3rem; line-height: 1.2; color: var(--pen); quotes: none; overflow-wrap: anywhere; }
+  .match-note { margin-top: 8px; font-size: 0.82rem; color: var(--ink-soft); }
+  .match-note.warn { color: var(--warn); font-weight: 500; }
+
+  /* ---------- Tool ---------- */
+  .tool { padding: 76px 0 40px; }
+  .tool-top { display: flex; flex-wrap: wrap; gap: 24px 40px; justify-content: space-between; align-items: flex-end; margin-bottom: 36px; }
+  .tool-head { max-width: 60ch; }
+  .tool-head h2 { font-size: clamp(1.9rem, 3.6vw, 2.7rem); line-height: 1.1; }
+  .tool-head p { margin-top: 12px; color: var(--ink-soft); font-size: 1.05rem; }
+
+  .region { border: 0; padding: 0; margin: 0; }
+  .region legend { font-size: 0.85rem; color: var(--ink-soft); padding: 0; margin-bottom: 8px; }
+  .seg { display: inline-flex; border: 2px solid var(--ink); border-radius: 999px; overflow: hidden; }
+  .seg label { position: relative; cursor: pointer; }
+  .seg input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+  .seg span { display: block; padding: 10px 18px; font-weight: 600; font-size: 0.92rem; }
+  .seg input:checked + span { background: var(--ink); color: #fff; }
+  .seg input:focus-visible + span { outline: 3px solid var(--amber-deep); outline-offset: -3px; }
+  @media (prefers-color-scheme: dark) {
+    .seg { border-color: var(--line); }
+    .seg input:checked + span { background: var(--amber); color: #1A1204; }
+  }
+
+  .tool-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 36px; align-items: start; }
+  .inputs { display: grid; gap: 22px; }
+  .step { background: var(--panel); border-radius: 6px; padding: 22px; }
+  .step h3 { font-size: 1.25rem; display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .n { display: inline-grid; place-items: center; flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: #fff; font: 600 0.9rem var(--body); }
+  @media (prefers-color-scheme: dark) { .n { background: var(--amber); color: #1A1204; } }
+
+  .drop {
+    position: relative; display: grid; place-items: center; gap: 4px; text-align: center; min-height: 148px; padding: 22px;
+    border: 2px dashed var(--ink-soft); border-radius: 6px; background: var(--paper); color: var(--ink); cursor: pointer;
+  }
+  .drop.over { border-color: var(--amber-deep); background: #FFF6E4; }
+  .drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .drop:focus-within { outline: 3px solid var(--ink); outline-offset: 2px; }
+  .drop strong { font-weight: 600; }
+  .drop span { font-size: 0.88rem; color: #46556F; }
+  .preview { display: none; margin-top: 14px; }
+  .preview img { display: block; max-width: 100%; max-height: 300px; border-radius: 4px; border: 1px solid var(--line); }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; align-items: center; }
+
+  textarea {
+    width: 100%; min-height: 190px; resize: vertical; padding: 14px; border-radius: 4px;
+    border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+    font: 400 0.95rem/1.6 var(--body);
+  }
+  .hint { font-size: 0.86rem; color: var(--ink-soft); margin-bottom: 10px; }
+
+  .status { display: flex; align-items: center; gap: 10px; min-height: 22px; font-size: 0.9rem; color: var(--ink-soft); }
+  .status:empty { display: none; }
+  .status.error { color: var(--danger); font-weight: 500; }
+  .spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--amber-deep); animation: spin 0.8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 3s; } }
+
+  .output { position: sticky; top: 16px; }
+  .output h3 { font-size: 1.25rem; display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .results { display: grid; gap: 16px; }
+  .empty { border: 2px dashed var(--line); border-radius: 14px; padding: 34px 26px; text-align: center; color: var(--ink-soft); display: grid; gap: 16px; justify-items: center; }
+  .empty .btns { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .out-actions { display: none; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+  .skipped { margin-top: 18px; font-size: 0.86rem; color: var(--ink-soft); }
+  .skipped summary { cursor: pointer; }
+  .skipped pre { white-space: pre-wrap; margin: 8px 0 0; font: inherit; }
+  .print-note { display: none; }
+
+  /* ---------- How it works ---------- */
+  .how { padding: 56px 0 28px; }
+  .how h2 { font-size: clamp(1.6rem, 3vw, 2.2rem); margin-bottom: 30px; }
+  .pipeline { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 36px; border-top: 3px solid var(--ink); }
+  @media (prefers-color-scheme: dark) { .pipeline { border-top-color: var(--amber); } }
+  .pipeline li { position: relative; padding-top: 24px; }
+  .pipeline li::before { content: ""; position: absolute; top: -10px; left: 0; width: 17px; height: 17px; border-radius: 50%; background: var(--amber); border: 3px solid var(--ink); }
+  @media (prefers-color-scheme: dark) { .pipeline li::before { border-color: var(--page); background: var(--amber); } }
+  .pipeline h3 { font-size: 1.2rem; margin-bottom: 8px; }
+  .pipeline p { color: var(--ink-soft); max-width: 38ch; }
+
+  /* ---------- Safety ---------- */
+  .safety { padding: 36px 0 72px; }
+  .safety-box { border-left: 8px solid var(--danger); background: var(--paper); color: var(--ink); border-radius: 4px 14px 14px 4px; padding: 26px 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px 44px; border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .safety-box h2 { grid-column: 1 / -1; font-size: 1.5rem; }
+  .safety-box p { color: #2D3B57; max-width: 56ch; }
+  .safety-box strong { color: var(--ink); }
+
+  footer { border-top: 1px solid var(--line); padding: 26px 0 40px; color: var(--ink-soft); font-size: 0.88rem; }
+
+  @media (max-width: 920px) {
+    .hero-grid { grid-template-columns: 1fr; gap: 40px; padding-bottom: 64px; }
+    .hero::after { display: none; }
+    .tool-grid { grid-template-columns: 1fr; }
+    .output { position: static; }
+    .pipeline { grid-template-columns: 1fr; gap: 30px; border-top: none; border-left: 3px solid var(--ink); padding-left: 26px; }
+    .pipeline li { padding-top: 0; }
+    .pipeline li::before { top: 4px; left: -36px; }
+    .safety-box { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 520px) {
+    .wrap { width: calc(100% - 28px); }
+    .nav-links { gap: 14px; font-size: 0.88rem; }
+    .step { padding: 18px; }
+    .note { margin-right: 14px; }
+    .slip { margin-left: 14px; }
+    .caption-out { margin-left: 18px; }
+    .seg span { padding: 10px 14px; }
+  }
+
+  @media print {
+    .hero, .inputs, .how, .safety, footer, .out-actions, .skipped, .empty, .region { display: none !important; }
+    body { background: #fff; color: #000; }
+    .tool { padding: 0; }
+    .tool-head { display: none; }
+    .tool-grid { display: block; }
+    .output { position: static; }
+    .label { break-inside: avoid; border: 1px solid #999; border-left-width: 8px; }
+    .print-note { display: block; margin-top: 18px; font-size: 0.9rem; }
+  }
+</style>
+</head>
+<body id="top">
+
+<header class="hero">
+  <div class="wrap">
+    <nav class="nav" aria-label="Main">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">Rx</span>Prescription Reader</a>
+      <div class="nav-links">
+        <a href="#how">How it works</a>
+        <a href="#safety">Safety</a>
+      </div>
+    </nav>
+
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <h1>Photo of a prescription in.<br>Clear medication list out.</h1>
+        <p class="hero-sub">Made for Indian and US prescriptions. It reads 1-0-1, BD, TDS, SOS and x 5/7 as well as PO BID, q6h PRN and #30, and links brands like Dolo and Pantop, or Tylenol and Lipitor, to their generic names.</p>
+        <div class="hero-actions">
+          <a class="btn" href="#tool">Read a prescription</a>
+        </div>
+      </div>
+
+      <div class="demo" aria-label="Example: a handwritten Indian prescription line becomes a medication label">
+        <div class="note">
+          <p class="hand-line">T. Dolo 650  1-0-1  x 5/7  pc</p>
+          <span class="cap">Handwritten note</span>
+        </div>
+        <p class="caption-out">What you get</p>
+        <div class="slip">
+          <article class="label">
+            <header class="label-head">
+              <div>
+                <p class="drug">Dolo 650</p>
+                <p class="generic">Generic: <b>paracetamol</b> (US name: acetaminophen)</p>
+              </div>
+              <span class="badge">Indian brand list</span>
+            </header>
+            <p class="directions">Take 650mg morning and night after food for 5 days.</p>
+          </article>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="tool" id="tool">
+  <div class="wrap">
+    <div class="tool-top">
+      <div class="tool-head">
+        <h2>Read a prescription</h2>
+        <p>Add a photo, fix any misread words in the text box, and your list updates. No photo handy? Try an Indian or US sample note.</p>
+      </div>
+      <fieldset class="region">
+        <legend>Show drug names for</legend>
+        <div class="seg" role="radiogroup" aria-label="Drug name style">
+          <label><input type="radio" name="region" value="india"><span>India</span></label>
+          <label><input type="radio" name="region" value="usa"><span>USA</span></label>
+          <label><input type="radio" name="region" value="both" checked><span>Both</span></label>
+        </div>
+      </fieldset>
+    </div>
+
+    <div class="tool-grid">
+      <div class="inputs">
+        <section class="step" aria-labelledby="s1">
+          <h3 id="s1"><span class="n" aria-hidden="true">1</span>Add a photo</h3>
+          <label class="drop" id="drop">
+            <input type="file" id="file" accept="image/*" aria-label="Choose a prescription photo">
+            <strong id="dropTitle">Drop a photo here, or choose a file</strong>
+            <span id="dropSub">JPG, PNG or WebP. Flat, well lit and in focus works best.</span>
+          </label>
+          <div class="preview" id="preview"><img id="previewImg" alt="Your uploaded prescription"></div>
+          <div class="row">
+            <button class="btn" id="readBtn" disabled>Read handwriting</button>
+          </div>
+          <div class="row"><div class="status" id="statusRead" role="status" aria-live="polite"></div></div>
+        </section>
+
+        <section class="step" aria-labelledby="s2">
+          <h3 id="s2"><span class="n" aria-hidden="true">2</span>Check the text</h3>
+          <p class="hint">Compare this with the photo. Fix anything that was misread, then update the list. You can also type or paste a note here.</p>
+          <textarea id="text" spellcheck="false" aria-label="Extracted prescription text" placeholder="The text Gemini reads from your photo appears here."></textarea>
+          <div class="row">
+            <button class="btn quiet small" id="parseBtn">Update list</button>
+            <button class="btn quiet small" id="sampleInBtn" type="button">Indian sample</button>
+            <button class="btn quiet small" id="sampleUsBtn" type="button">US sample</button>
+          </div>
+          <div class="row"><div class="status" id="statusParse" role="status" aria-live="polite"></div></div>
+        </section>
+      </div>
+
+      <aside class="output" aria-labelledby="s3">
+        <h3 id="s3"><span class="n" aria-hidden="true">3</span>Medication list</h3>
+        <div class="results" id="results"></div>
+        <div class="out-actions" id="outActions">
+          <button class="btn small" id="copyBtn" type="button">Copy list</button>
+          <button class="btn quiet small" id="printBtn" type="button">Print</button>
+        </div>
+        <div id="skippedWrap"></div>
+        <p class="print-note">Check every line against the original prescription before following it.</p>
+      </aside>
+    </div>
+  </div>
+</main>
+
+<section class="how" id="how">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <ol class="pipeline">
+      <li>
+        <h3>Gemini reads the handwriting</h3>
+        <p>Your photo goes to Google's Gemini model, which transcribes it line by line and marks anything unclear instead of guessing.</p>
+      </li>
+      <li>
+        <h3>Rules read Indian and US notation</h3>
+        <p>Pattern rules find strength, how often, timing and duration, including 1-0-1, BD, TDS, SOS, x 5/7, Sig lines, #30 and refills.</p>
+      </li>
+      <li>
+        <h3>Brands are linked to generics</h3>
+        <p>Names are checked against a list of common Indian brands, then the US RxNorm database. Generics show in both forms, like paracetamol and acetaminophen.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section class="safety" id="safety">
+  <div class="wrap">
+    <div class="safety-box">
+      <h2>Check every line against the original</h2>
+      <p>Handwriting recognition can misread a drug name or a number, and a wrong dose could be harmful if followed. <strong>Confirm with the prescriber or a pharmacist</strong> before acting on anything here. This site is not medical advice.</p>
+      <p>The Indian brand list is a starter list of common brands, not every product, and brand variants can differ in strength or ingredients. Your photo is sent through this site's server to Google's Gemini API, and this site does not store it. Google may use content sent on its free tier to improve its products, so don't upload prescriptions you want kept private.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">Built with Google Gemini, the NLM RxNorm API and Vercel.</div>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  let image = null; // { base64, mime }
+  const lookupCache = new Map();
+  const REGION_KEY = "rxreader_region";
+  let region = "both";
+
+  /* ---------------------------------------------------------------
+     Parsing rules (pattern based, no model). Covers Indian and US notation.
+  ---------------------------------------------------------------- */
+  const HEADER_RE = /^\s*(dr\.?|doctor|prof\.?|mr\.?|mrs\.?|ms\.?|patient|name|age|sex|gender|date|dob|address|addr|phone|ph|mob|mobile|reg\.?|regd|clinic|hospital|mbbs|md|diagnosis|dx|bp|weight|wt|height|allergies|allergy|follow|review|signature|sign)\b/i;
+  const CONT_RE = /^\s*(sig\.?:?|directions?:?|take\b|apply\b|instill\b|inhale\b|use\b|inject\b|disp(?:ense)?\.?:?|qty\.?:?|quantity:?|refills?\b|rf\b|#\s*\d|\d\s*-\s*\d\s*-\s*\d|(?:for|x|×)\s*\d|(?:after|before|with)\s+(?:food|meals?|breakfast|lunch|dinner)|(?:od|qd|bd|bid|tds|tid|qds|qid|hs|sos|prn|stat)\b)/i;
+  const NAME_ONLY_RE = /^[A-Za-z][A-Za-z\s\-.']{2,40}$/;
+
+  const DOTTED = [
+    [/\bb\.\s?i\.\s?d\b\.?/gi, "bid"], [/\bt\.\s?i\.\s?d\b\.?/gi, "tid"], [/\bq\.\s?i\.\s?d\b\.?/gi, "qid"],
+    [/\bt\.\s?d\.\s?s\b\.?/gi, "tds"], [/\bq\.\s?d\.\s?s\b\.?/gi, "qds"], [/\bb\.\s?d\b\.?/gi, "bd"],
+    [/\bq\.\s?d\b\.?/gi, "qd"], [/\bo\.\s?d\b\.?/gi, "od"], [/\bh\.\s?s\b\.?/gi, "hs"],
+    [/\bp\.\s?r\.\s?n\b\.?/gi, "prn"], [/\bs\.\s?o\.\s?s\b\.?/gi, "sos"], [/\bp\.\s?o\b\.?/gi, "po"],
+    [/\bp\.\s?c\b\.?/gi, "pc"], [/\ba\.\s?c\b\.?/gi, "ac"]
+  ];
+  const normalizeAbbrev = (line) => DOTTED.reduce((s, [re, to]) => s.replace(re, to), line);
+
+  const DOSAGE_RE = /(\d+(?:\.\d+)?)\s?(mg|mcg|g|ml|iu|%|units?)\b/i;
+  const FORM_WORDS = "tab\\.?|tablet|cap\\.?|capsule|syrup|syp\\.?|inj\\.?|injection|drops?|oint\\.?|ointment|cream|gel|susp\\.?|suspension|t\\.|c\\.";
+  const FORM_RE = new RegExp("^[\\s\\-*\\d.)]*(" + FORM_WORDS + ")\\s", "i");
+  const FORM_PREFIX_RE = new RegExp("^(" + FORM_WORDS + ")\\s*", "i");
+  const FORM_SUFFIX_RE = /\b(tablets?|capsules?|syrup|injection|suspension|cream|ointment|gel|drops)\s*$/i;
+
+  const QTY_RE = /(?:#\s*|\b(?:disp(?:ense)?|qty|quantity)\b\.?:?\s*#?\s*)(\d+)(?:\s*(?:tablets?|tabs?|capsules?|caps?))?/i;
+  const REFILL_RE = /\b(?:refills?|rf)\b\.?:?\s*(\d+)|\bno\s+refills?\b/i;
+  const SIG_RE = /\b(sig|take|apply|instill|inhale|use)\b/i;
+  const AS_NEEDED_RE = /\b(prn|sos|as\s+needed|if\s+needed|when\s+needed|when\s+required|if\s+required)\b/i;
+  const PER_DOSE_RE = /\b(\d+(?:\.\d+)?|½|1\/2|one|two|three|half)\s*(tablets?|tabs?|capsules?|caps?|pills?|teaspoons?|tsp|tablespoons?|tbsp|drops?|gtt|puffs?|sprays?)\b/i;
+  const EYE_CONTEXT_RE = /\b(eye|eyes|ophth\w*|ocular|gtt)\b/i;
+
+  const plural = (n, unit) => `${n} ${unit}${Number(n) === 1 ? "" : "s"}`;
+  const SLOT = "(1\\/2|0?\\.5|½|\\d)";
+
+  function slotLabel(m) {
+    const tokens = m.slice(1).filter((t) => t !== undefined);
+    const names4 = ["morning", "afternoon", "evening", "night"];
+    const names3 = ["morning", "afternoon", "night"];
+    const names = tokens.length === 4 ? names4 : names3;
+    const phrase = { morning: "in the morning", afternoon: "in the afternoon", evening: "in the evening", night: "at night" };
+    const count = (t) => (/^(1\/2|0?\.5|½)$/.test(t) ? "½" : t);
+    const on = tokens.map((t, i) => ({ t: count(t), name: names[i] })).filter((x) => x.t !== "0");
+    if (!on.length) return null;
+    if (on.length === 4 && on.every((x) => x.t === "1")) return "Four times daily";
+    const join = (arr) => (arr.length > 1 ? `${arr.slice(0, -1).join(", ")} and ${arr[arr.length - 1]}` : arr[0]);
+    if (on.every((x) => x.t === "1")) {
+      const txt = join(on.map((x) => x.name));
+      return txt.charAt(0).toUpperCase() + txt.slice(1);
+    }
+    return join(on.map((x) => `${x.t} ${phrase[x.name]}`));
+  }
+
+  const FREQUENCY_RULES = [
+    { re: new RegExp(`(?<![\\d/.])${SLOT}\\s*-\\s*${SLOT}\\s*-\\s*${SLOT}(?:\\s*-\\s*${SLOT})?(?![\\d/-])`), label: slotLabel },
+    { re: /\bonce\s*(a|per)?\s*(day|daily)\b/i, label: () => "Once daily" },
+    { re: /\btwice\s*(a|per)?\s*(day|daily)\b/i, label: () => "Twice daily" },
+    { re: /\bthrice\s*(a|per)?\s*(day|daily)\b/i, label: () => "Three times daily" },
+    { re: /\b(two|three|four)\s*times\s*(a|per)?\s*(day|daily)\b/i, label: (m) => ({ two: "Twice daily", three: "Three times daily", four: "Four times daily" })[m[1].toLowerCase()] },
+    { re: /\b(\d+)\s*times?\s*(a|per)?\s*(day|daily)\b/i, label: (m) => `${m[1]} times daily` },
+    { re: /\bq(\d+)h\b/i, label: (m) => `Every ${m[1]} hours` },
+    { re: /\bevery\s+(\d+)\s*hours?\b/i, label: (m) => `Every ${m[1]} hours` },
+    { re: /\b(od|qd)\b/i, label: () => "Once daily", skipIfEye: true },
+    { re: /\b(bd|bid)\b/i, label: () => "Twice daily" },
+    { re: /\b(tds|tid)\b/i, label: () => "Three times daily" },
+    { re: /\b(qds|qid)\b/i, label: () => "Four times daily" },
+    { re: /\b(hs|qhs|nocte|at\s+bedtime|at\s+night)\b/i, label: () => "At bedtime" },
+    { re: /\b(qam|mane|every\s+morning|in\s+the\s+morning)\b/i, label: () => "In the morning" },
+    { re: /\b(qpm|every\s+evening|in\s+the\s+evening)\b/i, label: () => "In the evening" },
+    { re: /\bstat\b/i, label: () => "Once, immediately (stat)" },
+    { re: /\bqod\b/i, label: () => "Every other day" },
+    { re: /\b(once\s+weekly|weekly)\b/i, label: () => "Once weekly" },
+    { re: /\b(daily|every\s+day)\b/i, label: () => "Once daily" }
+  ];
+
+  const TIMING_RULES = [
+    { re: /\b(after|post)\s*(food|meals?|eating)\b/i, label: () => "After food" },
+    { re: /\bafter\s+(breakfast|lunch|dinner)\b/i, label: (m) => `After ${m[1].toLowerCase()}` },
+    { re: /\bpc\b/i, label: () => "After food" },
+    { re: /\bbefore\s*(food|meals?|eating)\b/i, label: () => "Before food" },
+    { re: /\bbefore\s+(breakfast|lunch|dinner)\b/i, label: (m) => `Before ${m[1].toLowerCase()}` },
+    { re: /\bac\b/i, label: () => "Before food" },
+    { re: /\bempty\s+stomach\b/i, label: () => "On an empty stomach" },
+    { re: /\bwith\s*(food|meals?|milk|water)\b/i, label: (m) => `With ${m[1].toLowerCase()}` }
+  ];
+
+  const DURATION_RULES = [
+    { re: /(?<![\/\d.-])(\d+)\s*\/\s*7(?![\/\d])/i, label: (m) => plural(m[1], "day") },
+    { re: /\b(?:x|×|for)\s*(\d+)\s*\/\s*52(?![\/\d])/i, label: (m) => plural(m[1], "week") },
+    { re: /\b(?:x|×|for)\s*(\d+)\s*\/\s*12(?![\/\d])/i, label: (m) => plural(m[1], "month") },
+    { re: /\bfor\s+(\d+)\s*days?\b/i, label: (m) => plural(m[1], "day") },
+    { re: /\bfor\s+(\d+)\s*(?:weeks?|wks?)\b/i, label: (m) => plural(m[1], "week") },
+    { re: /\bfor\s+(\d+)\s*months?\b/i, label: (m) => plural(m[1], "month") },
+    { re: /(?:\bx|×)\s*(\d+)\s*(?:days?|d)\b/i, label: (m) => plural(m[1], "day") },
+    { re: /(?:\bx|×)\s*(\d+)\s*(?:weeks?|wks?)\b/i, label: (m) => plural(m[1], "week") },
+    { re: /\b(\d+)\s*days?\b/i, label: (m) => plural(m[1], "day") },
+    { re: /\b(\d+)\s*(?:weeks?|wks?)\b/i, label: (m) => plural(m[1], "week") }
+  ];
+
+  const ROUTE_RULES = [
+    { re: /\b(po|by\s+mouth|oral(?:ly)?)\b/i, label: () => "Oral" },
+    { re: /\biv\b/i, label: () => "Intravenous" },
+    { re: /\bim\b/i, label: () => "Intramuscular" },
+    { re: /\b(sc|subq|subcut\w*|subcutaneous(?:ly)?)\b/i, label: () => "Subcutaneous" },
+    { re: /\b(sl|sublingual(?:ly)?)\b/i, label: () => "Sublingual" },
+    { re: /\b(pr|rectal(?:ly)?)\b/i, label: () => "Rectal" },
+    { re: /\b(inh|inhal\w*)\b/i, label: () => "Inhaled" },
+    { re: /\b(topical(?:ly)?|apply)\b/i, label: () => "Topical" },
+    { re: /\b(intranasal(?:ly)?|nasal)\b/i, label: () => "Nasal" }
+  ];
+
+  function applyRules(rules, text, eye) {
+    for (const rule of rules) {
+      if (eye && rule.skipIfEye) continue;
+      const m = text.match(rule.re);
+      if (m) {
+        const value = rule.label(m);
+        if (value) return { value, index: m.index };
+      }
+    }
+    return null;
+  }
+
+  function perDoseText(m) {
+    const words = { one: "1", two: "2", three: "3", half: "½", "1/2": "½" };
+    const qty = words[m[1].toLowerCase()] || m[1];
+    let unit = m[2].toLowerCase();
+    unit = /^tab/.test(unit) ? "tablet" : /^cap/.test(unit) ? "capsule" : /^pill/.test(unit) ? "pill"
+      : /^(tsp|teaspoon)/.test(unit) ? "teaspoon" : /^(tbsp|tablespoon)/.test(unit) ? "tablespoon"
+      : /^(gtt|drop)/.test(unit) ? "drop" : /^puff/.test(unit) ? "puff" : /^spray/.test(unit) ? "spray" : unit;
+    return `${qty} ${unit}${qty === "1" || qty === "½" ? "" : "s"}`;
+  }
+
+  function parseEntry(entry) {
+    let text = entry.text;
+    let quantity = null, refills = null;
+    text = text.replace(QTY_RE, (m, n) => { quantity = n; return " "; });
+    text = text.replace(REFILL_RE, (m, n) => { refills = n === undefined ? "0" : n; return " "; });
+
+    const eye = EYE_CONTEXT_RE.test(text);
+    const dose = text.match(DOSAGE_RE);
+    const freq = applyRules(FREQUENCY_RULES, text, eye);
+    const timing = applyRules(TIMING_RULES, text);
+    const duration = applyRules(DURATION_RULES, text);
+    let route = applyRules(ROUTE_RULES, text);
+    const needed = text.match(AS_NEEDED_RE);
+    const per = text.match(PER_DOSE_RE);
+    const sig = text.match(SIG_RE);
+
+    if (eye) {
+      const site = text.match(/\b(od|os|ou)\b/i);
+      if (site) route = { value: { od: "Right eye", os: "Left eye", ou: "Both eyes" }[site[1].toLowerCase()], index: site.index };
+    }
+
+    const cuts = [dose, freq, timing, duration, route, needed, per, sig]
+      .filter(Boolean).map((x) => x.index);
+    const end = cuts.length ? Math.min(...cuts) : text.length;
+
+    let name = text.slice(0, end)
+      .replace(/^[\s\-*\d.)]+/, "")
+      .replace(/^rx[\s.:)-]*/i, "")
+      .replace(FORM_PREFIX_RE, "")
+      .replace(FORM_SUFFIX_RE, "")
+      .replace(/[\s,;:\-]+$/, "")
+      .trim();
+    const numMatch = name.match(/\b(\d{2,4})$/);
+
+    let frequency = freq ? freq.value : null;
+    return {
+      raw: entry.raw,
+      name: name || null,
+      nameNumber: numMatch ? numMatch[1] : null,
+      strength: dose ? dose[1] + dose[2].toLowerCase() : null,
+      perDose: per ? perDoseText(per) : null,
+      frequency,
+      asNeeded: !!needed,
+      timing: timing ? timing.value : null,
+      duration: duration ? duration.value : null,
+      route: route ? route.value : null,
+      quantity,
+      refills
+    };
+  }
+
+  const looksLikeMedication = (t) =>
+    DOSAGE_RE.test(t) || FORM_RE.test(t) || PER_DOSE_RE.test(t) || AS_NEEDED_RE.test(t) || !!applyRules(FREQUENCY_RULES, t);
+
+  const rawLines = (text) => text.split(/\r?\n|;/).map((s) => s.trim()).filter((s) => s && /[a-zA-Z]/.test(s));
+
+  // Groups lines into medicine entries. Instruction lines that follow a drug line
+  // (Sig:, 1-0-1, x 5 days, Disp: #30) are attached to that drug.
+  function buildEntries(lines) {
+    const entries = [], skipped = [];
+    let lastWasEntry = false;
+    for (let i = 0; i < lines.length; i++) {
+      const raw = lines[i];
+      if (HEADER_RE.test(raw)) { skipped.push(raw); lastWasEntry = false; continue; }
+      const n = normalizeAbbrev(raw);
+      if (lastWasEntry && CONT_RE.test(n)) {
+        const last = entries[entries.length - 1];
+        last.raw += " " + raw; last.text += " " + n;
+        continue;
+      }
+      const nextIsCont = i + 1 < lines.length && !HEADER_RE.test(lines[i + 1]) && CONT_RE.test(normalizeAbbrev(lines[i + 1]));
+      if (looksLikeMedication(n) || (NAME_ONLY_RE.test(n) && nextIsCont)) {
+        entries.push({ raw, text: n });
+        lastWasEntry = true;
+      } else {
+        skipped.push(raw);
+        lastWasEntry = false;
+      }
+    }
+    return { entries, skipped };
+  }
+
+  /* ---------------------------------------------------------------
+     Directions text. Only uses fields found in the note.
+  ---------------------------------------------------------------- */
+  function directions(d) {
+    const parts = [];
+    const amount = d.perDose ? (d.strength ? `${d.perDose} (${d.strength})` : d.perDose) : d.strength;
+    if (amount) parts.push(amount);
+    if (d.route) parts.push(d.route === "Oral" ? "by mouth" : /eye$|eyes$/.test(d.route) ? `in the ${d.route.toLowerCase()}` : `by ${d.route.toLowerCase()} route`);
+    let freq = d.frequency ? d.frequency.toLowerCase() : null;
+    if (!freq && d.asNeeded) freq = "as needed";
+    if (freq) parts.push(freq);
+    if (d.timing) parts.push(d.timing.toLowerCase());
+    if (d.duration) parts.push(`for ${d.duration}`);
+    if (!parts.length) return "No directions were found in this line.";
+    return `Take ${parts.join(" ")}${d.frequency && d.asNeeded ? ", as needed" : ""}.`;
+  }
+
+  /* ---------------------------------------------------------------
+     Rendering
+  ---------------------------------------------------------------- */
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const displayName = (d) => d.name || "Name not readable";
+
+  // Which generic name to show first depends on the India / USA / Both setting.
+  function genericNames(r) {
+    if (!r || r.level !== "good") return null;
+    const inn = r.genericIndia, us = r.genericUS;
+    if (!inn && !us) return null;
+    if (!inn || !us || inn.toLowerCase() === us.toLowerCase()) return { main: inn || us, alt: null, altLabel: null };
+    if (region === "india") return { main: inn, alt: null, altLabel: null };
+    if (region === "usa") return { main: us, alt: null, altLabel: null };
+    return { main: inn, alt: us, altLabel: "US name" };
+  }
+
+  function fullInstruction(d, r) {
+    const g = genericNames(r);
+    let label = displayName(d);
+    if (g) {
+      const a = label.toLowerCase(), b = g.main.toLowerCase();
+      if (!a.includes(b) && !b.includes(a)) label += ` (${g.main}${g.alt ? `, ${g.altLabel} ${g.alt}` : ""})`;
+    }
+    return `${label}: ${directions(d)}`;
+  }
+
+  function badge(r) {
+    if (!r) return "";
+    if (r.level === "good") {
+      if (r.caution) return '<span class="badge weak">Brand family matched</span>';
+      if (r.source === "india") return '<span class="badge">Indian brand list</span>';
+      if (r.source === "name-list") return '<span class="badge">Known generic name</span>';
+      return `<span class="badge">${r.isBrand ? "Brand matched in RxNorm (US)" : "Matched in RxNorm (US)"}</span>`;
+    }
+    if (r.level === "weak") return '<span class="badge weak">Check this name</span>';
+    if (r.level === "error") return '<span class="badge error">Lookup unavailable</span>';
+    return '<span class="badge none">No match found</span>';
+  }
+
+  function notes(d, r) {
+    const out = [];
+    if (r && r.level === "weak") out.push(`Possible match: ${esc(r.matchedName || "")}. It wasn't used. Check the spelling on the prescription.`);
+    if (r && r.level === "none") out.push("Not found in the Indian brand list or RxNorm. Check the spelling, or look it up with a pharmacist.");
+    if (r && r.level === "error") out.push("The drug database didn't respond, so the name is shown as written.");
+    if (r && r.caution) out.push(esc(r.caution));
+    if (d.strengthFromBrand) out.push(`Strength (${esc(d.strength)}) was read from the number in the brand name and assumed to be mg. Check it.`);
+    return out.map((t) => `<p class="match-note warn">${t}</p>`).join("");
+  }
+
+  function labelHtml(it) {
+    const { d, r } = it;
+    const level = r && r.level === "good" && r.caution ? "weak" : (r ? r.level : "none");
+    const g = genericNames(r);
+    const generic = g ? `<p class="generic">Generic: <b>${esc(g.main)}</b>${g.alt ? ` (${g.altLabel}: ${esc(g.alt)})` : ""}</p>` : "";
+    const how = d.frequency ? d.frequency + (d.asNeeded ? ", as needed" : "") : (d.asNeeded ? "As needed" : null);
+    const facts = [
+      ["Strength", d.strength], ["Per dose", d.perDose], ["How often", how], ["Timing", d.timing],
+      ["Duration", d.duration], ["Route", d.route], ["Quantity", d.quantity], ["Refills", d.refills]
+    ].filter(([, v]) => v).map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
+    const missing = [["strength", d.strength || d.perDose], ["how often", d.frequency || d.asNeeded],
+      ["duration", d.duration || d.quantity || d.refills || d.asNeeded]]
+      .filter(([, v]) => !v).map(([k]) => k);
+
+    return `<article class="label ${level}">
+      <header class="label-head">
+        <div><h4 class="drug">${esc(displayName(d))}</h4>${generic}</div>
+        ${badge(r)}
+      </header>
+      <p class="directions">${esc(directions(d))}</p>
+      ${facts ? `<dl class="facts">${facts}</dl>` : ""}
+      ${missing.length ? `<p class="missing">Not found in the note: ${missing.join(", ")}.</p>` : ""}
+      <p class="from"><span>From the note</span><q>${esc(d.raw)}</q></p>
+      ${notes(d, r)}
+    </article>`;
+  }
+
+  let currentList = "";
+  let lastItems = [], lastSkipped = [];
+
+  function emptyState(message) {
+    return `<div class="empty"><p>${message}</p><div class="btns">
+      <button class="btn quiet small" data-sample="in" type="button">Try the Indian sample</button>
+      <button class="btn quiet small" data-sample="us" type="button">Try the US sample</button></div></div>`;
+  }
+
+  function render(items, skipped, emptyMessage) {
+    lastItems = items; lastSkipped = skipped;
+    const results = $("results");
+    if (!items.length) {
+      results.innerHTML = emptyState(emptyMessage || "Each medicine appears here as a label with its generic name and directions.");
+      $("outActions").style.display = "none";
+      currentList = "";
+    } else {
+      results.innerHTML = items.map(labelHtml).join("");
+      currentList = items.map((it, i) => `${i + 1}. ${fullInstruction(it.d, it.r)}`).join("\n");
+      $("outActions").style.display = "flex";
+    }
+    $("skippedWrap").innerHTML = skipped.length
+      ? `<details class="skipped"><summary>${skipped.length} line${skipped.length > 1 ? "s" : ""} skipped (not medication-like)</summary><pre>${esc(skipped.join("\n"))}</pre></details>`
+      : "";
+  }
+
+  function setStatus(el, msg, kind) {
+    el.className = "status" + (kind === "error" ? " error" : "");
+    el.innerHTML = "";
+    if (!msg) return;
+    if (kind === "busy") {
+      const s = document.createElement("span");
+      s.className = "spin";
+      el.appendChild(s);
+    }
+    const t = document.createElement("span");
+    t.textContent = msg;
+    el.appendChild(t);
+  }
+
+  /* ---------------------------------------------------------------
+     API calls (your own server; the Gemini key never reaches the browser)
+  ---------------------------------------------------------------- */
+  async function lookup(name) {
+    const cacheKey = (region === "usa" ? "us:" : "in:") + name.toLowerCase();
+    if (lookupCache.has(cacheKey)) return lookupCache.get(cacheKey);
+    try {
+      const r = await fetch("/api/lookup?name=" + encodeURIComponent(name) + (region === "usa" ? "&region=us" : ""));
+      if (!r.ok) throw new Error("Lookup returned " + r.status);
+      const data = await r.json();
+      lookupCache.set(cacheKey, data);
+      return data;
+    } catch (e) {
+      return { level: "error", message: e.message };
+    }
+  }
+
+  async function extractText() {
+    const r = await fetch("/api/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: image.base64, mime: image.mime })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const fallback = r.status === 413 ? "That image is too large. Try a smaller photo." : `Something went wrong (${r.status}). Try again.`;
+      throw new Error(data.error || fallback);
+    }
+    return data.text;
+  }
+
+  async function parseAndRender() {
+    const { entries, skipped } = buildEntries(rawLines($("text").value));
+    if (!entries.length) {
+      render([], skipped, $("text").value.trim()
+        ? "No medication lines found. A line needs a strength (like 500mg), a form (Tab., Cap., Syp.), or a frequency (BD, 1-0-1, PRN)."
+        : null);
+      return;
+    }
+
+    const parsed = entries.slice(0, 25).map(parseEntry);
+    setStatus($("statusParse"), "Matching medicines to the drug lists…", "busy");
+    $("parseBtn").disabled = true;
+    try {
+      const matches = await Promise.all(parsed.map((d) => (d.name ? lookup(d.name) : Promise.resolve({ level: "none" }))));
+      parsed.forEach((d, i) => {
+        const r = matches[i];
+        d.strengthFromBrand = false;
+        if (!d.strength && !d.perDose && d.nameNumber && r && r.level === "good" && r.source === "india" && r.single) {
+          d.strength = d.nameNumber + "mg";
+          d.strengthFromBrand = true;
+        }
+      });
+      render(parsed.map((d, i) => ({ d, r: matches[i] })), skipped);
+      setStatus($("statusParse"), entries.length > 25 ? "Showing the first 25 medication lines." : "");
+    } finally {
+      $("parseBtn").disabled = false;
+    }
+  }
+
+  /* ---------------------------------------------------------------
+     Image handling
+  ---------------------------------------------------------------- */
+  function prepareImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const max = 1800;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * scale);
+        c.height = Math.round(img.height * scale);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        resolve({ previewUrl: url, base64: c.toDataURL("image/jpeg", 0.9).split(",")[1], mime: "image/jpeg" });
+      };
+      img.onerror = () => reject(new Error("Couldn't open that image. Try a JPG or PNG."));
+      img.src = url;
+    });
+  }
+
+  async function handleFile(file) {
+    if (!file) return;
+    setStatus($("statusRead"), "Preparing the photo…", "busy");
+    try {
+      image = await prepareImage(file);
+      $("previewImg").src = image.previewUrl;
+      $("preview").style.display = "block";
+      $("dropTitle").textContent = file.name;
+      $("dropSub").textContent = "Click or drop to choose a different photo.";
+      $("readBtn").disabled = false;
+      setStatus($("statusRead"), "");
+    } catch (e) {
+      setStatus($("statusRead"), e.message, "error");
+    }
+  }
+
+  /* ---------------------------------------------------------------
+     Wiring
+  ---------------------------------------------------------------- */
+  const SAMPLES = {
+    in: [
+      "Dr. A. Rao, MBBS, General Physician",
+      "Date: 12/09/2026",
+      "Rx",
+      "1. T. Dolo 650  1-0-1  x 5/7  pc",
+      "2. Cap. Augmentin 625 Duo BD x 5 days after food",
+      "3. Tab. Pantop 40 OD before breakfast x 2 weeks",
+      "4. Tab. Montair LC HS x 7 days",
+      "5. Syp. Crocin 5ml SOS"
+    ].join("\n"),
+    us: [
+      "Patient: John Smith   DOB: 04/12/1980",
+      "Lisinopril 10 mg tablet",
+      "Sig: Take 1 tablet by mouth once daily",
+      "Disp: #30  Refills: 2",
+      "Metformin 500 mg tablet",
+      "Sig: 1 tab PO BID with meals",
+      "Disp: #60  Refills: 3",
+      "Tylenol 500 mg  Sig: 2 tabs PO q6h PRN pain"
+    ].join("\n")
+  };
+
+  async function useSample(kind) {
+    $("text").value = SAMPLES[kind];
+    await parseAndRender().catch((e) => setStatus($("statusParse"), e.message, "error"));
+    $("results").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  $("file").addEventListener("change", (e) => handleFile(e.target.files[0]));
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => handleFile(e.dataTransfer.files[0]));
+
+  $("readBtn").addEventListener("click", async () => {
+    $("readBtn").disabled = true;
+    setStatus($("statusRead"), "Reading the handwriting. This usually takes a few seconds.", "busy");
+    try {
+      $("text").value = await extractText();
+      setStatus($("statusRead"), "");
+      await parseAndRender();
+    } catch (e) {
+      setStatus($("statusRead"), e.message, "error");
+    } finally {
+      $("readBtn").disabled = !image;
+    }
+  });
+
+  $("parseBtn").addEventListener("click", () => {
+    parseAndRender().catch((e) => setStatus($("statusParse"), e.message, "error"));
+  });
+  $("sampleInBtn").addEventListener("click", () => useSample("in"));
+  $("sampleUsBtn").addEventListener("click", () => useSample("us"));
+  $("results").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-sample]");
+    if (b) useSample(b.dataset.sample);
+  });
+
+  document.querySelectorAll('input[name="region"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      region = input.value;
+      try { localStorage.setItem(REGION_KEY, region); } catch (e) { /* storage unavailable */ }
+      if ($("text").value.trim()) parseAndRender().catch((err) => setStatus($("statusParse"), err.message, "error"));
+      else render(lastItems, lastSkipped);
+    });
+  });
+
+  $("copyBtn").addEventListener("click", async () => {
+    const btn = $("copyBtn");
+    try {
+      await navigator.clipboard.writeText(currentList);
+      btn.textContent = "Copied";
+    } catch (e) {
+      btn.textContent = "Copy failed";
+    }
+    setTimeout(() => { btn.textContent = "Copy list"; }, 1800);
+  });
+  $("printBtn").addEventListener("click", () => window.print());
+
+  try {
+    const saved = localStorage.getItem(REGION_KEY);
+    if (saved === "india" || saved === "usa" || saved === "both") {
+      region = saved;
+      document.querySelector(`input[name="region"][value="${saved}"]`).checked = true;
+    }
+  } catch (e) { /* storage unavailable */ }
+
+  render([], []);
+})();
+</script>
+</body>
+</html>

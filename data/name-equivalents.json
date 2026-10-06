@@ -1,0 +1,21 @@
+{
+ "paracetamol": "acetaminophen",
+ "salbutamol": "albuterol",
+ "levosalbutamol": "levalbuterol",
+ "adrenaline": "epinephrine",
+ "noradrenaline": "norepinephrine",
+ "frusemide": "furosemide",
+ "glibenclamide": "glyburide",
+ "rifampicin": "rifampin",
+ "lignocaine": "lidocaine",
+ "pethidine": "meperidine",
+ "thyroxine": "levothyroxine",
+ "amoxycillin": "amoxicillin",
+ "sulphasalazine": "sulfasalazine",
+ "cyclosporin": "cyclosporine",
+ "ciclosporin": "cyclosporine",
+ "chlorphenamine": "chlorpheniramine",
+ "isoprenaline": "isoproterenol",
+ "cotrimoxazole": "sulfamethoxazole + trimethoprim",
+ "aluminium hydroxide": "aluminum hydroxide"
+}

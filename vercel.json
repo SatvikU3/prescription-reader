@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "api/extract.js": { "maxDuration": 30 },
+    "api/lookup.js": { "maxDuration": 15 }
+  }
+}

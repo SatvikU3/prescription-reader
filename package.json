@@ -1,0 +1,11 @@
+{
+  "name": "prescription-reader",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Photo of a handwritten Indian or US prescription in, clear medication list out.",
+  "scripts": {
+    "dev": "vercel dev",
+    "test": "node test/api.test.js",
+    "build:brands": "node scripts/build-india-brands.js"
+  }
+}
