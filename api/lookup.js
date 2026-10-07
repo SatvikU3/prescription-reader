@@ -5,7 +5,8 @@
  *
  * Finds the generic name for a drug name written on a prescription.
  *   1. Indian brand list (data/india-brands.json), skipped when region=us
- *   2. A known generic name (data/name-equivalents.json), e.g. paracetamol / acetaminophen
+ *   2. Classic compounding names (data/classic-names.json), e.g. Amphojel, and a known generic name
+ *      (data/name-equivalents.json), e.g. paracetamol / acetaminophen
  *   3. RxNorm (US National Library of Medicine, free, no key) for US brands and generics
  *   4. A close spelling of an Indian brand, offered as a "check this" suggestion only
  *
@@ -14,6 +15,7 @@
 
 const INDIA = require("../data/india-brands.json");
 const EQUIV = require("../data/name-equivalents.json");
+const CLASSIC = require("../data/classic-names.json");   // old pharmacy names used in compounded prescriptions
 
 const RX = "https://rxnav.nlm.nih.gov/REST";
 const TIMEOUT_MS = 8000;
@@ -85,19 +87,22 @@ function distance(a, b) {
   return prev[n];
 }
 
-function indiaFuzzy(key) {
+function indiaFuzzy(key, useIndia) {
   if (key.length < 5) return null;
   const limit = key.length >= 9 ? 2 : 1;
   let best = null;
-  for (const k of Object.keys(INDIA)) {
-    if (k.length < 5 || Math.abs(k.length - key.length) > limit) continue;
-    const d = distance(key, k);
-    if (d <= limit && (!best || d < best.d)) best = { k, d };
+  const maps = (useIndia ? [INDIA] : []).concat([CLASSIC]);
+  for (const map of maps) {
+    for (const k of Object.keys(map)) {
+      if (k.length < 5 || Math.abs(k.length - key.length) > limit) continue;
+      const d = distance(key, k);
+      if (d <= limit && (!best || d < best.d)) best = { k, d, map };
+    }
   }
   if (!best) return null;
-  const generic = genericFields(splitGenerics(INDIA[best.k]));
+  const generic = genericFields(splitGenerics(best.map[best.k]));
   return {
-    level: "weak", score: 60, source: "india", isBrand: true,
+    level: "weak", score: 60, source: best.map === INDIA ? "india" : "classic", isBrand: best.map === INDIA,
     matchedName: capitalise(best.k) + " (" + generic.genericIndia + ")"
   };
 }
@@ -197,8 +202,11 @@ module.exports = async function handler(req, res) {
   if (!name) return res.status(400).json({ error: "Add a drug name with ?name=" });
   const useIndia = (req.query && req.query.region) !== "us";
 
-  const base = baseName(name);
+  let base = baseName(name);
   if (!base) return res.status(200).json({ level: "none" });
+  // "Tr Belladonna" / "Tinct. Belladonna" means belladonna tincture.
+  const tincture = base.match(/^(?:tr|tinct|tincture of)\s+(.+)$/);
+  if (tincture) base = tincture[1] + " tincture";
   const key = base.replace(/ /g, "");
 
   try {
@@ -207,6 +215,14 @@ module.exports = async function handler(req, res) {
     if (useIndia) {
       const hit = indiaExact(base);
       if (hit) return res.status(200).json(hit);
+    }
+
+    // Old pharmacy names used in compounded prescriptions.
+    if (CLASSIC[key]) {
+      return res.status(200).json(Object.assign(
+        { level: "good", score: 100, source: "classic", isBrand: false, matchedName: capitalise(base) },
+        genericFields(splitGenerics(CLASSIC[key]))
+      ));
     }
 
     // A generic name that appears in the India/US equivalents table (e.g. paracetamol, albuterol).
@@ -220,10 +236,8 @@ module.exports = async function handler(req, res) {
     const result = await rxnormLookup(base);
     if (result.level === "good") return res.status(200).json(result);
 
-    if (useIndia) {
-      const fuzzy = indiaFuzzy(key);
-      if (fuzzy) return res.status(200).json(fuzzy);
-    }
+    const fuzzy = indiaFuzzy(key, useIndia);
+    if (fuzzy) return res.status(200).json(fuzzy);
     return res.status(200).json(result);
   } catch (err) {
     console.error("lookup failed", err && err.message);

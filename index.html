@@ -140,6 +140,13 @@
   .facts div { border-top: 1px solid var(--line); padding-top: 6px; }
   .facts dt { font-size: 0.78rem; color: var(--ink-soft); }
   .facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .ingredients { list-style: none; margin: 14px 0 0; padding: 0; }
+  .ingredients li { border-top: 1px solid var(--line); padding: 10px 0 8px; }
+  .ing-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+  .ing-top b { font-size: 1.05rem; }
+  .ing-top .badge { margin-left: auto; }
+  .aswritten { font-size: 0.82rem; color: var(--ink-soft); }
+  .qs { margin-top: 2px; font-size: 0.84rem; color: var(--ink-soft); }
   .missing { margin-top: 12px; font-size: 0.86rem; color: var(--danger); font-weight: 500; }
   .from { margin-top: 14px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 0.8rem; color: var(--ink-soft); }
   .from q { font-family: var(--hand); font-weight: 600; font-size: 1.3rem; line-height: 1.2; color: var(--pen); quotes: none; overflow-wrap: anywhere; }
@@ -423,7 +430,8 @@
     [/\bt\.\s?d\.\s?s\b\.?/gi, "tds"], [/\bq\.\s?d\.\s?s\b\.?/gi, "qds"], [/\bb\.\s?d\b\.?/gi, "bd"],
     [/\bq\.\s?d\b\.?/gi, "qd"], [/\bo\.\s?d\b\.?/gi, "od"], [/\bh\.\s?s\b\.?/gi, "hs"],
     [/\bp\.\s?r\.\s?n\b\.?/gi, "prn"], [/\bs\.\s?o\.\s?s\b\.?/gi, "sos"], [/\bp\.\s?o\b\.?/gi, "po"],
-    [/\bp\.\s?c\b\.?/gi, "pc"], [/\ba\.\s?c\b\.?/gi, "ac"]
+    [/\bp\.\s?c\b\.?/gi, "pc"], [/\ba\.\s?c\b\.?/gi, "ac"],
+    [/\bq\.?\s?s\.?\s?a\.?d\b\.?/gi, "qsad"]
   ];
   const normalizeAbbrev = (line) => DOTTED.reduce((s, [re, to]) => s.replace(re, to), line);
 
@@ -433,7 +441,7 @@
   const FORM_PREFIX_RE = new RegExp("^(" + FORM_WORDS + ")\\s*", "i");
   const FORM_SUFFIX_RE = /\b(tablets?|capsules?|syrup|injection|suspension|cream|ointment|gel|drops)\s*$/i;
 
-  const QTY_RE = /(?:#\s*|\b(?:disp(?:ense)?|qty|quantity)\b\.?:?\s*#?\s*)(\d+)(?:\s*(?:tablets?|tabs?|capsules?|caps?))?/i;
+  const QTY_RE = /(?:#\s*|\b(?:disp(?:ense)?|qty|quantity)\b\.?:?\s*#?\s*)(\d+)(?:\s*(tablets?|tabs?|capsules?|caps?|ml))?/i;
   const REFILL_RE = /\b(?:refills?|rf)\b\.?:?\s*(\d+)|\bno\s+refills?\b/i;
   const SIG_RE = /\b(sig|take|apply|instill|inhale|use)\b/i;
   const AS_NEEDED_RE = /\b(prn|sos|as\s+needed|if\s+needed|when\s+needed|when\s+required|if\s+required)\b/i;
@@ -544,7 +552,7 @@
   function parseEntry(entry) {
     let text = entry.text;
     let quantity = null, refills = null;
-    text = text.replace(QTY_RE, (m, n) => { quantity = n; return " "; });
+    text = text.replace(QTY_RE, (m, n, unit) => { quantity = unit ? `${n} ${unit.toLowerCase() === "ml" ? "mL" : unit.toLowerCase()}` : n; return " "; });
     text = text.replace(REFILL_RE, (m, n) => { refills = n === undefined ? "0" : n; return " "; });
 
     const eye = EYE_CONTEXT_RE.test(text);
@@ -576,7 +584,7 @@
     const numMatch = name.match(/\b(\d{2,4})$/);
 
     let frequency = freq ? freq.value : null;
-    return {
+    const parsed = {
       raw: entry.raw,
       name: name || null,
       nameNumber: numMatch ? numMatch[1] : null,
@@ -590,6 +598,14 @@
       quantity,
       refills
     };
+    if (entry.compound) {
+      parsed.compound = true;
+      parsed.ingredients = entry.ingredients.map(parseIngredient);
+      parsed.preparation = entry.preparation ? preparationText(entry.preparation) : null;
+      parsed.name = parsed.ingredients.map((g) => g.display).join(" + ");
+      parsed.nameNumber = null;
+    }
+    return parsed;
   }
 
   const looksLikeMedication = (t) =>
@@ -597,29 +613,84 @@
 
   const rawLines = (text) => text.split(/\r?\n|;/).map((s) => s.trim()).filter((s) => s && /[a-zA-Z]/.test(s));
 
+  // Classic prescriptions list ingredients first (Inscription), then how to prepare them
+  // (Subscription: "M. ft. solution") and then the directions (Signa: "Sig: 5 mL t.i.d. a.c.").
+  const LABEL_RE = /^\s*\(?\s*(inscription|subscription|signa|superscription|rx|℞)\s*\)?\s*:?\s*$/i;
+  const SUBSCRIPTION_RE = /^\s*(m\.?\s*(?:&|\+|et|and)?\s*f\.?\s*t\b\.?|misce\b|mix\b)/i;
+  const SIG_LINE_RE = /^\s*(sig|signa)\b/i;
+  const INGREDIENT_RE = /^[A-Za-z][A-Za-z\s\-.'&/()]{2,60}$/;
+
+  function preparationText(raw) {
+    const m = raw.match(/^\s*m\.?\s*(?:&|\+|et|and)?\s*f\.?\s*t\b\.?\s*(.*)$/i);
+    if (!m) return raw.trim();
+    let rest = m[1].replace(/^[.\s]+/, "").trim().toLowerCase();
+    if (/^(solutio|sol\.?)$/.test(rest)) rest = "solution";
+    return rest ? `Mix and make ${/^[aeiou]/.test(rest) ? "an" : "a"} ${rest}` : "Mix and make";
+  }
+
+  function parseIngredient(raw) {
+    const qs = /\bqsad\b/i.test(raw);
+    let name = raw.replace(/\bqsad\b.*$/i, "").replace(/[\s,;:\-]+$/, "").trim();
+    const asWritten = name;
+    const t = name.match(/^(?:tr|tinct)\.?\s+(.+)$/i);
+    const display = t ? `${t[1].charAt(0).toUpperCase()}${t[1].slice(1)} tincture` : name;
+    return { name, display, asWritten, qs };
+  }
+
   // Groups lines into medicine entries. Instruction lines that follow a drug line
   // (Sig:, 1-0-1, x 5 days, Disp: #30) are attached to that drug.
   function buildEntries(lines) {
     const entries = [], skipped = [];
     let lastWasEntry = false;
+    let pending = [];          // ingredient-looking lines waiting for a Sig line
+    let preparation = null;    // "M. ft. solution" line
+    let signaNext = false;     // the line after a "(Signa)" label is the directions, however "Sig:" was read
+
+    const dropPending = () => { pending.forEach((l) => skipped.push(l)); pending = []; if (preparation) skipped.push(preparation); preparation = null; };
+
     for (let i = 0; i < lines.length; i++) {
       const raw = lines[i];
-      if (HEADER_RE.test(raw)) { skipped.push(raw); lastWasEntry = false; continue; }
+      if (LABEL_RE.test(raw)) { if (/signa/i.test(raw)) signaNext = true; skipped.push(raw); continue; }
+      if (HEADER_RE.test(raw)) { dropPending(); skipped.push(raw); lastWasEntry = false; continue; }
       const n = normalizeAbbrev(raw);
+
+      if (SUBSCRIPTION_RE.test(n) && !looksLikeMedication(n)) { preparation = raw; continue; }
+
+      const isSig = SIG_LINE_RE.test(n) || signaNext;
+      signaNext = false;
+
+      // A Sig line after ingredient lines describes one compounded preparation.
+      if (!lastWasEntry && pending.length && isSig) {
+        entries.push({ compound: true, ingredients: pending.map(normalizeAbbrev), preparation: preparation && normalizeAbbrev(preparation),
+          raw: pending.concat(preparation ? [preparation] : [], [raw]).join(" / "), text: n });
+        pending = []; preparation = null; lastWasEntry = true;
+        continue;
+      }
+
       if (lastWasEntry && CONT_RE.test(n)) {
         const last = entries[entries.length - 1];
         last.raw += " " + raw; last.text += " " + n;
         continue;
       }
+
       const nextIsCont = i + 1 < lines.length && !HEADER_RE.test(lines[i + 1]) && CONT_RE.test(normalizeAbbrev(lines[i + 1]));
-      if (looksLikeMedication(n) || (NAME_ONLY_RE.test(n) && nextIsCont)) {
+      const bare = n.replace(/^[\s\-*\d.)]+/, "");     // the line without its "1." numbering
+      // A lone drug name followed by its Sig line is one medicine, but once ingredient lines are
+      // waiting, a name before the Sig line is another ingredient of the same preparation.
+      if (looksLikeMedication(n) || (NAME_ONLY_RE.test(bare) && nextIsCont && pending.length === 0)) {
+        dropPending();
         entries.push({ raw, text: n });
         lastWasEntry = true;
+      } else if (INGREDIENT_RE.test(bare) && bare.split(/\s+/).length <= 6) {
+        pending.push(raw.replace(/^[\s\-*\d.)]+/, ""));
+        if (pending.length > 4) skipped.push(pending.shift());
+        lastWasEntry = false;
       } else {
         skipped.push(raw);
         lastWasEntry = false;
       }
     }
+    dropPending();
     return { entries, skipped };
   }
 
@@ -629,7 +700,7 @@
   function directions(d) {
     const parts = [];
     const amount = d.perDose ? (d.strength ? `${d.perDose} (${d.strength})` : d.perDose) : d.strength;
-    if (amount) parts.push(amount);
+    if (amount) parts.push(d.compound ? `${amount} of the mixture` : amount);
     if (d.route) parts.push(d.route === "Oral" ? "by mouth" : /eye$|eyes$/.test(d.route) ? `in the ${d.route.toLowerCase()}` : `by ${d.route.toLowerCase()} route`);
     let freq = d.frequency ? d.frequency.toLowerCase() : null;
     if (!freq && d.asNeeded) freq = "as needed";
@@ -657,12 +728,25 @@
     return { main: inn, alt: us, altLabel: "US name" };
   }
 
-  function fullInstruction(d, r) {
+  function genericText(r) {
+    const g = genericNames(r);
+    return g ? `${g.main}${g.alt ? `, ${g.altLabel} ${g.alt}` : ""}` : null;
+  }
+
+  function fullInstruction(d, r, ri) {
+    if (d.compound) {
+      const names = d.ingredients.map((g, i) => {
+        const gn = genericNames(ri && ri[i]);
+        // "Belladonna tincture (belladonna)" says nothing new, so only add a generic that differs.
+        return gn && !g.display.toLowerCase().includes(gn.main.toLowerCase()) ? `${g.display} (${genericText(ri[i])})` : g.display;
+      });
+      return `Compounded preparation of ${names.join(" and ")}: ${d.preparation ? d.preparation + ". " : ""}${directions(d)}`;
+    }
     const g = genericNames(r);
     let label = displayName(d);
     if (g) {
       const a = label.toLowerCase(), b = g.main.toLowerCase();
-      if (!a.includes(b) && !b.includes(a)) label += ` (${g.main}${g.alt ? `, ${g.altLabel} ${g.alt}` : ""})`;
+      if (!a.includes(b) && !b.includes(a)) label += ` (${genericText(r)})`;
     }
     return `${label}: ${directions(d)}`;
   }
@@ -690,7 +774,35 @@
     return out.map((t) => `<p class="match-note warn">${t}</p>`).join("");
   }
 
+  function compoundHtml(it) {
+    const { d, ri } = it;
+    const level = ri && ri.every((r) => r && r.level === "good") ? "good" : "weak";
+    const rows = d.ingredients.map((g, i) => {
+      const r = ri ? ri[i] : null;
+      const gt = genericNames(r);
+      const generic = gt ? `<p class="generic">Generic: <b>${esc(gt.main)}</b>${gt.alt ? ` (${gt.altLabel}: ${esc(gt.alt)})` : ""}</p>` : "";
+      const written = g.display !== g.asWritten ? ` <span class="aswritten">written as "${esc(g.asWritten)}"</span>` : "";
+      const qs = g.qs ? '<p class="qs">q.s. ad: add enough to make up the final amount</p>' : "";
+      return `<li><div class="ing-top"><b>${esc(g.display)}</b>${written}${badge(r)}</div>${generic}${qs}${notes({}, r)}</li>`;
+    }).join("");
+    const how = d.frequency ? d.frequency + (d.asNeeded ? ", as needed" : "") : (d.asNeeded ? "As needed" : null);
+    const facts = [["Preparation", d.preparation], ["Amount per dose", d.perDose || d.strength], ["How often", how],
+      ["Timing", d.timing], ["Duration", d.duration], ["Route", d.route], ["Quantity", d.quantity], ["Refills", d.refills]]
+      .filter(([, v]) => v).map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
+    return `<article class="label ${level}">
+      <header class="label-head">
+        <div><h4 class="drug">Compounded preparation</h4><p class="generic">Made from ${d.ingredients.length} ingredient${d.ingredients.length > 1 ? "s" : ""}</p></div>
+        <span class="badge">Compounded</span>
+      </header>
+      <p class="directions">${esc(directions(d))}</p>
+      <ul class="ingredients">${rows}</ul>
+      ${facts ? `<dl class="facts">${facts}</dl>` : ""}
+      <p class="from"><span>From the note</span><q>${esc(d.raw)}</q></p>
+    </article>`;
+  }
+
   function labelHtml(it) {
+    if (it.d.compound) return compoundHtml(it);
     const { d, r } = it;
     const level = r && r.level === "good" && r.caution ? "weak" : (r ? r.level : "none");
     const g = genericNames(r);
@@ -735,7 +847,7 @@
       currentList = "";
     } else {
       results.innerHTML = items.map(labelHtml).join("");
-      currentList = items.map((it, i) => `${i + 1}. ${fullInstruction(it.d, it.r)}`).join("\n");
+      currentList = items.map((it, i) => `${i + 1}. ${fullInstruction(it.d, it.r, it.ri)}`).join("\n");
       $("outActions").style.display = "flex";
     }
     $("skippedWrap").innerHTML = skipped.length
@@ -801,8 +913,12 @@
     setStatus($("statusParse"), "Matching medicines to the drug lists…", "busy");
     $("parseBtn").disabled = true;
     try {
-      const matches = await Promise.all(parsed.map((d) => (d.name ? lookup(d.name) : Promise.resolve({ level: "none" }))));
+      const matches = await Promise.all(parsed.map((d) => (
+        d.compound ? Promise.all(d.ingredients.map((g) => lookup(g.name)))
+          : d.name ? lookup(d.name) : Promise.resolve({ level: "none" })
+      )));
       parsed.forEach((d, i) => {
+        if (d.compound) return;
         const r = matches[i];
         d.strengthFromBrand = false;
         if (!d.strength && !d.perDose && d.nameNumber && r && r.level === "good" && r.source === "india" && r.single) {
@@ -810,7 +926,7 @@
           d.strengthFromBrand = true;
         }
       });
-      render(parsed.map((d, i) => ({ d, r: matches[i] })), skipped);
+      render(parsed.map((d, i) => (d.compound ? { d, r: null, ri: matches[i] } : { d, r: matches[i] })), skipped);
       setStatus($("statusParse"), entries.length > 25 ? "Showing the first 25 medication lines." : "");
     } finally {
       $("parseBtn").disabled = false;
