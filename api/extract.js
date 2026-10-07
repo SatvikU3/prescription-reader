@@ -13,7 +13,9 @@ const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 const RATE_MAX = Number(process.env.RATE_LIMIT_MAX || 10);      // requests per IP per window
 const RATE_WINDOW_MS = 10 * 60 * 1000;                           // 10 minutes
 const MAX_BASE64_CHARS = 4000000;                                // Vercel caps request bodies at ~4.5 MB
-const UPSTREAM_TIMEOUT_MS = 24000;                               // longest a single attempt may take
+const UPSTREAM_TIMEOUT_MS = 24000;                               // longest a single attempt may take when there is no fallback
+// With a fallback model, the main model only gets this long, so the fallback still has time to answer.
+const PRIMARY_TIMEOUT_MS = Number(process.env.PRIMARY_TIMEOUT_MS || 14000);
 // Stop starting new attempts after this long, so we answer with our own message before Vercel's limit.
 // This suits the default 30-second limit in vercel.json. If you raise maxDuration to 60, also set TIME_BUDGET_MS=50000.
 const TIME_BUDGET_MS = Number(process.env.TIME_BUDGET_MS || 26000);
@@ -61,10 +63,11 @@ function isRateLimited(ip) {
 
 // While testing, set DEBUG_ERRORS=1 in Vercel to show Google's error text on the page.
 // Remove it afterwards. The text never contains your key, but visitors don't need to see it.
-function debugDetail(status, data) {
+function debugDetail(status, data, attempts) {
   if (process.env.DEBUG_ERRORS !== "1") return "";
   const message = (data && data.error && data.error.message) || "no message";
-  return " (Google said " + status + ": " + String(message).slice(0, 300) + ")";
+  const tried = (attempts || []).map((a) => a.model + ": " + (a.timedOut ? "timed out" : a.status) + " after " + (a.ms / 1000).toFixed(1) + "s").join("; ");
+  return " (Google said " + status + ": " + String(message).slice(0, 300) + (tried ? ". Tried " + tried : "") + ")";
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -100,25 +103,46 @@ async function callGemini(model, apiKey, mime, image, timeoutMs) {
   }
 }
 
-// Main model, one retry if Google is busy, then the fallback model, all within the time budget.
+// Tries the main model, then the fallback model (once more if it was only busy), all within the time budget.
+// Without a fallback model the main model is simply tried twice.
 async function generate(apiKey, mime, image) {
   const started = Date.now();
   const left = () => TIME_BUDGET_MS - (Date.now() - started);
-  const attempt = (model) => callGemini(model, apiKey, mime, image, Math.max(1000, Math.min(UPSTREAM_TIMEOUT_MS, left())));
+  const hasFallback = !!FALLBACK_MODEL && FALLBACK_MODEL !== "none" && FALLBACK_MODEL !== MODEL;
+  const attempts = [];
 
-  let result = await attempt(MODEL);
-  if (!result.ok && TRANSIENT.has(result.status) && left() > 5000) {
-    await sleep(RETRY_DELAY_MS);
-    result = await attempt(MODEL);
-  }
-  if (!result.ok && FALL_BACK_ON.has(result.status) && left() > 5000 &&
-      FALLBACK_MODEL && FALLBACK_MODEL !== "none" && FALLBACK_MODEL !== MODEL) {
+  const attempt = async (model, cap) => {
+    const t0 = Date.now();
+    const r = await callGemini(model, apiKey, mime, image, Math.max(1000, Math.min(cap, left())));
+    r.ms = Date.now() - t0;
+    attempts.push({ model, status: r.status, timedOut: !!r.timedOut, ms: r.ms });
+    console.log("Gemini attempt", model, r.timedOut ? "timed out" : r.status, r.ms + "ms");
+    return r;
+  };
+  // A model that timed out is slow, so asking it again would waste time.
+  const canRetry = (r) => !r.ok && !r.timedOut && TRANSIENT.has(r.status) && left() > 5000;
+
+  let result = await attempt(MODEL, hasFallback ? PRIMARY_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS);
+  if (result.ok) return result;
+
+  if (hasFallback && FALL_BACK_ON.has(result.status) && left() > 3000) {
     console.error("Gemini error", result.status, MODEL, result.data && result.data.error && result.data.error.message, "- trying", FALLBACK_MODEL);
-    const fallback = await attempt(FALLBACK_MODEL);
-    if (fallback.ok) return fallback;
-    console.error("Fallback failed", fallback.status, FALLBACK_MODEL, fallback.data && fallback.data.error && fallback.data.error.message);
+    let fb = await attempt(FALLBACK_MODEL, UPSTREAM_TIMEOUT_MS);
+    if (fb.ok) return fb;
+    if (canRetry(fb)) {
+      await sleep(RETRY_DELAY_MS);
+      fb = await attempt(FALLBACK_MODEL, UPSTREAM_TIMEOUT_MS);
+      if (fb.ok) return fb;
+    }
+    console.error("Fallback failed", fb.status, FALLBACK_MODEL, fb.data && fb.data.error && fb.data.error.message);
+  } else if (!hasFallback && canRetry(result)) {
+    await sleep(RETRY_DELAY_MS);
+    const again = await attempt(MODEL, UPSTREAM_TIMEOUT_MS);
+    if (again.ok) return again;
   }
-  return result; // report the main model's failure
+
+  result.attempts = attempts; // the main model's failure is reported, with every attempt for debugging
+  return result;
 }
 
 function readBody(req) {
@@ -177,19 +201,20 @@ module.exports = async function handler(req, res) {
 
   if (!result.ok) {
     console.error("Gemini error", result.status, result.model, data.error && data.error.message);
+    const detail = debugDetail(result.status, data, result.attempts);
     if (result.status === 429) {
-      return res.status(429).json({ error: "The shared Gemini quota is busy right now. Try again in a minute." });
+      return res.status(429).json({ error: "The shared Gemini quota is busy right now. Try again in a minute." + detail });
     }
     if (result.status === 503) {
-      return res.status(503).json({ error: "The handwriting reader is busy right now. Try again in a minute." + debugDetail(result.status, data) });
+      return res.status(503).json({ error: "The handwriting reader is busy right now. Try again in a minute." + detail });
     }
     if (result.timedOut) {
-      return res.status(504).json({ error: "The handwriting reader took too long. Try again." });
+      return res.status(504).json({ error: "The handwriting reader took too long. Try again." + detail });
     }
     if (result.status === 0) {
-      return res.status(502).json({ error: "Couldn't reach the handwriting reader. Try again." + debugDetail(result.status, data) });
+      return res.status(502).json({ error: "Couldn't reach the handwriting reader. Try again." + detail });
     }
-    return res.status(502).json({ error: "The handwriting reader had a problem. Try again." + debugDetail(result.status, data) });
+    return res.status(502).json({ error: "The handwriting reader had a problem. Try again." + detail });
   }
 
   if (data.promptFeedback && data.promptFeedback.blockReason) {
