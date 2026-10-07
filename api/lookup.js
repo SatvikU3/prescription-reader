@@ -5,8 +5,9 @@
  *
  * Finds the generic name for a drug name written on a prescription.
  *   1. Indian brand list (data/india-brands.json), skipped when region=us
- *   2. Classic compounding names (data/classic-names.json), e.g. Amphojel, and a known generic name
- *      (data/name-equivalents.json), e.g. paracetamol / acetaminophen
+ *   2. Classic compounding names (data/classic-names.json), e.g. Amphojel, and known generic names
+ *      (data/generic-names.json, data/name-equivalents.json), e.g. oxprenolol, paracetamol / acetaminophen.
+ *      Latin forms such as "Dorzolamidum" are read as the generic ("dorzolamide").
  *   3. RxNorm (US National Library of Medicine, free, no key) for US brands and generics
  *   4. A close spelling of an Indian brand, offered as a "check this" suggestion only
  *
@@ -16,6 +17,7 @@
 const INDIA = require("../data/india-brands.json");
 const EQUIV = require("../data/name-equivalents.json");
 const CLASSIC = require("../data/classic-names.json");   // old pharmacy names used in compounded prescriptions
+const GENERICS = new Set(require("../data/generic-names.json"));   // common generic (INN) names
 
 const RX = "https://rxnav.nlm.nih.gov/REST";
 const TIMEOUT_MS = 8000;
@@ -89,22 +91,34 @@ function distance(a, b) {
 
 function indiaFuzzy(key, useIndia) {
   if (key.length < 5) return null;
-  const limit = key.length >= 9 ? 2 : 1;
+  const limit = key.length >= 8 ? 2 : 1;
   let best = null;
-  const maps = (useIndia ? [INDIA] : []).concat([CLASSIC]);
-  for (const map of maps) {
-    for (const k of Object.keys(map)) {
+  const consider = (names, kind, map) => {
+    for (const k of names) {
       if (k.length < 5 || Math.abs(k.length - key.length) > limit) continue;
       const d = distance(key, k);
-      if (d <= limit && (!best || d < best.d)) best = { k, d, map };
+      if (d <= limit && (!best || d < best.d)) best = { k, d, kind, map };
     }
-  }
+  };
+  if (useIndia) consider(Object.keys(INDIA), "india", INDIA);
+  consider(Object.keys(CLASSIC), "classic", CLASSIC);
+  consider(GENERICS, "generic-list", null);
   if (!best) return null;
+  if (best.kind === "generic-list") {
+    return { level: "weak", score: 60, source: "generic-list", isBrand: false, matchedName: capitalise(best.k) };
+  }
   const generic = genericFields(splitGenerics(best.map[best.k]));
   return {
-    level: "weak", score: 60, source: best.map === INDIA ? "india" : "classic", isBrand: best.map === INDIA,
+    level: "weak", score: 60, source: best.kind, isBrand: best.kind === "india",
     matchedName: capitalise(best.k) + " (" + generic.genericIndia + ")"
   };
+}
+
+// Latin pharmacopoeia forms: dorzolamidum -> dorzolamide, metforminum -> metformin.
+function latinVariants(base) {
+  if (base.includes(" ") || base.length < 7 || !base.endsWith("um")) return [];
+  const stem = base.slice(0, -2);
+  return [stem, stem + "e"];
 }
 
 async function rx(path, params) {
@@ -225,12 +239,20 @@ module.exports = async function handler(req, res) {
       ));
     }
 
-    // A generic name that appears in the India/US equivalents table (e.g. paracetamol, albuterol).
-    if (EQUIV[base] || US_TO_IN[base]) {
+    // Common generic names, including the Latin form some prescribers use (Dorzolamidum).
+    if (GENERICS.has(base) || EQUIV[base] || US_TO_IN[base]) {
       return res.status(200).json(Object.assign(
-        { level: "good", score: 100, source: "name-list", isBrand: false, matchedName: base },
+        { level: "good", score: 100, source: "generic-list", isBrand: false, matchedName: capitalise(base) },
         genericFields([base])
       ));
+    }
+    for (const v of latinVariants(base)) {
+      if (GENERICS.has(v) || EQUIV[v] || US_TO_IN[v]) {
+        return res.status(200).json(Object.assign(
+          { level: "good", score: 100, source: "generic-list", isBrand: false, matchedName: capitalise(v), latinForm: true },
+          genericFields([v])
+        ));
+      }
     }
 
     const result = await rxnormLookup(base);

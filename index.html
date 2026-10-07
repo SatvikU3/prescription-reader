@@ -756,7 +756,8 @@
     if (r.level === "good") {
       if (r.caution) return '<span class="badge weak">Brand family matched</span>';
       if (r.source === "india") return '<span class="badge">Indian brand list</span>';
-      if (r.source === "name-list") return '<span class="badge">Known generic name</span>';
+      if (r.source === "name-list" || r.source === "generic-list") return '<span class="badge">Known generic name</span>';
+      if (r.source === "classic") return '<span class="badge">Classic pharmacy name</span>';
       return `<span class="badge">${r.isBrand ? "Brand matched in RxNorm (US)" : "Matched in RxNorm (US)"}</span>`;
     }
     if (r.level === "weak") return '<span class="badge weak">Check this name</span>';
@@ -770,8 +771,9 @@
     if (r && r.level === "none") out.push("Not found in the Indian brand list or RxNorm. Check the spelling, or look it up with a pharmacist.");
     if (r && r.level === "error") out.push("The drug database didn't respond, so the name is shown as written.");
     if (r && r.caution) out.push(esc(r.caution));
+    const info = r && r.latinForm && d.name ? [`"${esc(d.name)}" is the Latin form of ${esc(String(r.matchedName).toLowerCase())}.`] : [];
     if (d.strengthFromBrand) out.push(`Strength (${esc(d.strength)}) was read from the number in the brand name and assumed to be mg. Check it.`);
-    return out.map((t) => `<p class="match-note warn">${t}</p>`).join("");
+    return info.map((t) => `<p class="match-note">${t}</p>`).join("") + out.map((t) => `<p class="match-note warn">${t}</p>`).join("");
   }
 
   function compoundHtml(it) {
