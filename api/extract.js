@@ -13,7 +13,13 @@ const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 const RATE_MAX = Number(process.env.RATE_LIMIT_MAX || 10);      // requests per IP per window
 const RATE_WINDOW_MS = 10 * 60 * 1000;                           // 10 minutes
 const MAX_BASE64_CHARS = 4000000;                                // Vercel caps request bodies at ~4.5 MB
-const UPSTREAM_TIMEOUT_MS = 15000;                               // per attempt; the function allows 60 s in total
+const UPSTREAM_TIMEOUT_MS = 24000;                               // longest a single attempt may take
+// Stop starting new attempts after this long, so we answer with our own message before Vercel's limit.
+// This suits the default 30-second limit in vercel.json. If you raise maxDuration to 60, also set TIME_BUDGET_MS=50000.
+const TIME_BUDGET_MS = Number(process.env.TIME_BUDGET_MS || 26000);
+// Gemini 3 models "think" before answering, which is slow. Reading text off a photo doesn't need much of it.
+// Set GEMINI_THINKING_LEVEL=none to leave the model's default.
+const THINKING_LEVEL = (process.env.GEMINI_THINKING_LEVEL || "low").trim();
 // When the main model is busy, try a second one. Set GEMINI_FALLBACK_MODEL=none to turn this off.
 const FALLBACK_MODEL = (process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite").trim();
 const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS === undefined ? 1500 : process.env.RETRY_DELAY_MS);
@@ -63,9 +69,14 @@ function debugDetail(status, data) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function callGemini(model, apiKey, mime, image) {
+function generationConfig(model) {
+  if (!model.startsWith("gemini-3")) return { temperature: 0 };   // older models are steadier at 0
+  return THINKING_LEVEL === "none" ? {} : { thinkingConfig: { thinkingLevel: THINKING_LEVEL } };
+}
+
+async function callGemini(model, apiKey, mime, image, timeoutMs) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const upstream = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent",
@@ -74,8 +85,7 @@ async function callGemini(model, apiKey, mime, image) {
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify({
           contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: mime, data: image } }] }],
-          // Gemini 3 models work best at their default temperature; older ones are steadier at 0.
-          generationConfig: model.startsWith("gemini-3") ? {} : { temperature: 0 }
+          generationConfig: generationConfig(model)
         }),
         signal: controller.signal
       }
@@ -90,16 +100,21 @@ async function callGemini(model, apiKey, mime, image) {
   }
 }
 
-// Main model, one retry if Google is busy, then the fallback model.
+// Main model, one retry if Google is busy, then the fallback model, all within the time budget.
 async function generate(apiKey, mime, image) {
-  let result = await callGemini(MODEL, apiKey, mime, image);
-  if (!result.ok && TRANSIENT.has(result.status)) {
+  const started = Date.now();
+  const left = () => TIME_BUDGET_MS - (Date.now() - started);
+  const attempt = (model) => callGemini(model, apiKey, mime, image, Math.max(1000, Math.min(UPSTREAM_TIMEOUT_MS, left())));
+
+  let result = await attempt(MODEL);
+  if (!result.ok && TRANSIENT.has(result.status) && left() > 5000) {
     await sleep(RETRY_DELAY_MS);
-    result = await callGemini(MODEL, apiKey, mime, image);
+    result = await attempt(MODEL);
   }
-  if (!result.ok && FALL_BACK_ON.has(result.status) && FALLBACK_MODEL && FALLBACK_MODEL !== "none" && FALLBACK_MODEL !== MODEL) {
+  if (!result.ok && FALL_BACK_ON.has(result.status) && left() > 5000 &&
+      FALLBACK_MODEL && FALLBACK_MODEL !== "none" && FALLBACK_MODEL !== MODEL) {
     console.error("Gemini error", result.status, MODEL, result.data && result.data.error && result.data.error.message, "- trying", FALLBACK_MODEL);
-    const fallback = await callGemini(FALLBACK_MODEL, apiKey, mime, image);
+    const fallback = await attempt(FALLBACK_MODEL);
     if (fallback.ok) return fallback;
     console.error("Fallback failed", fallback.status, FALLBACK_MODEL, fallback.data && fallback.data.error && fallback.data.error.message);
   }
