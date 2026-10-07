@@ -9,11 +9,16 @@
  * never reaches the browser.
  */
 
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
 const RATE_MAX = Number(process.env.RATE_LIMIT_MAX || 10);      // requests per IP per window
 const RATE_WINDOW_MS = 10 * 60 * 1000;                           // 10 minutes
 const MAX_BASE64_CHARS = 4000000;                                // Vercel caps request bodies at ~4.5 MB
-const UPSTREAM_TIMEOUT_MS = 25000;
+const UPSTREAM_TIMEOUT_MS = 15000;                               // per attempt; the function allows 60 s in total
+// When the main model is busy, try a second one. Set GEMINI_FALLBACK_MODEL=none to turn this off.
+const FALLBACK_MODEL = (process.env.GEMINI_FALLBACK_MODEL || "gemini-3.5-flash-lite").trim();
+const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS === undefined ? 1500 : process.env.RETRY_DELAY_MS);
+const TRANSIENT = new Set([0, 500, 502, 503, 504]);               // 0 = timed out or couldn't connect
+const FALL_BACK_ON = new Set([0, 404, 429, 500, 502, 503, 504]);
 const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const PROMPT =
@@ -54,6 +59,51 @@ function debugDetail(status, data) {
   if (process.env.DEBUG_ERRORS !== "1") return "";
   const message = (data && data.error && data.error.message) || "no message";
   return " (Google said " + status + ": " + String(message).slice(0, 300) + ")";
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function callGemini(model, apiKey, mime, image) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    const upstream = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: mime, data: image } }] }],
+          // Gemini 3 models work best at their default temperature; older ones are steadier at 0.
+          generationConfig: model.startsWith("gemini-3") ? {} : { temperature: 0 }
+        }),
+        signal: controller.signal
+      }
+    );
+    const data = await upstream.json().catch(() => ({}));
+    return { ok: upstream.ok, status: upstream.status, data, model };
+  } catch (err) {
+    const timedOut = err && err.name === "AbortError";
+    return { ok: false, status: 0, timedOut, data: { error: { message: timedOut ? "timed out" : String(err && err.message) } }, model };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Main model, one retry if Google is busy, then the fallback model.
+async function generate(apiKey, mime, image) {
+  let result = await callGemini(MODEL, apiKey, mime, image);
+  if (!result.ok && TRANSIENT.has(result.status)) {
+    await sleep(RETRY_DELAY_MS);
+    result = await callGemini(MODEL, apiKey, mime, image);
+  }
+  if (!result.ok && FALL_BACK_ON.has(result.status) && FALLBACK_MODEL && FALLBACK_MODEL !== "none" && FALLBACK_MODEL !== MODEL) {
+    console.error("Gemini error", result.status, MODEL, result.data && result.data.error && result.data.error.message, "- trying", FALLBACK_MODEL);
+    const fallback = await callGemini(FALLBACK_MODEL, apiKey, mime, image);
+    if (fallback.ok) return fallback;
+    console.error("Fallback failed", fallback.status, FALLBACK_MODEL, fallback.data && fallback.data.error && fallback.data.error.message);
+  }
+  return result; // report the main model's failure
 }
 
 function readBody(req) {
@@ -107,51 +157,35 @@ module.exports = async function handler(req, res) {
     return res.status(400).json({ error: "The image data isn't valid base64." });
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  const result = await generate(apiKey, mime, image);
+  const data = result.data || {};
 
-  try {
-    const upstream = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(MODEL) + ":generateContent",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: PROMPT }, { inline_data: { mime_type: mime, data: image } }] }],
-          generationConfig: { temperature: 0 }
-        }),
-        signal: controller.signal
-      }
-    );
-
-    const data = await upstream.json().catch(() => ({}));
-
-    if (!upstream.ok) {
-      console.error("Gemini error", upstream.status, data && data.error && data.error.message);
-      if (upstream.status === 429) {
-        return res.status(429).json({ error: "The shared Gemini quota is busy right now. Try again in a minute." });
-      }
-      return res.status(502).json({ error: "The handwriting reader had a problem. Try again." + debugDetail(upstream.status, data) });
+  if (!result.ok) {
+    console.error("Gemini error", result.status, result.model, data.error && data.error.message);
+    if (result.status === 429) {
+      return res.status(429).json({ error: "The shared Gemini quota is busy right now. Try again in a minute." });
     }
-
-    if (data.promptFeedback && data.promptFeedback.blockReason) {
-      return res.status(422).json({ error: "Gemini couldn't process this image. Try a clearer photo." });
+    if (result.status === 503) {
+      return res.status(503).json({ error: "The handwriting reader is busy right now. Try again in a minute." + debugDetail(result.status, data) });
     }
-
-    const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
-    const text = parts.map((p) => p.text || "").join("").trim();
-    if (!text) {
-      return res.status(422).json({ error: "No text was found in this image. Try a clearer, closer photo." });
-    }
-
-    return res.status(200).json({ text });
-  } catch (err) {
-    if (err && err.name === "AbortError") {
+    if (result.timedOut) {
       return res.status(504).json({ error: "The handwriting reader took too long. Try again." });
     }
-    console.error("extract failed", err && err.message);
-    return res.status(502).json({ error: "Couldn't reach the handwriting reader. Try again." + (process.env.DEBUG_ERRORS === "1" ? " (" + String(err && err.message).slice(0, 200) + ")" : "") });
-  } finally {
-    clearTimeout(timer);
+    if (result.status === 0) {
+      return res.status(502).json({ error: "Couldn't reach the handwriting reader. Try again." + debugDetail(result.status, data) });
+    }
+    return res.status(502).json({ error: "The handwriting reader had a problem. Try again." + debugDetail(result.status, data) });
   }
+
+  if (data.promptFeedback && data.promptFeedback.blockReason) {
+    return res.status(422).json({ error: "Gemini couldn't process this image. Try a clearer photo." });
+  }
+
+  const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+  const text = parts.map((p) => p.text || "").join("").trim();
+  if (!text) {
+    return res.status(422).json({ error: "No text was found in this image. Try a clearer, closer photo." });
+  }
+
+  return res.status(200).json({ text });
 };
