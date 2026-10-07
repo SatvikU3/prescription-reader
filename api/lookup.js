@@ -116,19 +116,31 @@ async function rx(path, params) {
   }
 }
 
-async function rxnormLookup(term) {
-  const approx = await rx("/approximateTerm.json", { term, maxEntries: 3 });
-  const candidates = (approx.approximateGroup && approx.approximateGroup.candidate) || [];
-  if (!candidates.length) return { level: "none", source: "rxnorm" };
+function words(s) {
+  return String(s).toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
+}
 
-  const best = candidates[0];
-  const score = Number(best.score);
-  const level = score >= 75 ? "good" : score >= 50 ? "weak" : "none";
-  const propsData = await rx("/rxcui/" + encodeURIComponent(best.rxcui) + "/properties.json");
-  const props = propsData.properties || {};
+// How well a RxNorm concept name matches what was written on the prescription.
+// 2 = the written name appears in it as whole words, 1 = a one or two letter misspelling, 0 = unrelated.
+// (RxNorm's own match scores are only a ranking, so names are compared instead.)
+function nameMatch(term, conceptName) {
+  const t = words(term).join(" ");
+  const nameWords = words(conceptName);
+  if (!t || !nameWords.length) return 0;
+  if ((" " + nameWords.join(" ") + " ").includes(" " + t + " ")) return 2;
+  // "Tylenol Extra Strength": the first word alone is found, which is worth a suggestion but not trust.
+  const first = t.split(" ")[0];
+  if (t.includes(" ") && first.length >= 4 && nameWords.includes(first)) return 1;
+  const limit = t.length >= 9 ? 2 : t.length >= 5 ? 1 : 0;
+  if (limit && !t.includes(" ") &&
+      nameWords.some((w) => w.length >= 4 && Math.abs(w.length - t.length) <= limit && distance(t, w) <= limit)) return 1;
+  return 0;
+}
 
+async function conceptResult(rxcui, level, knownProps) {
+  const props = knownProps || ((await rx("/rxcui/" + encodeURIComponent(rxcui) + "/properties.json")).properties || {});
   const result = {
-    level, score, source: "rxnorm", rxcui: best.rxcui,
+    level, score: level === "good" ? 100 : 60, source: "rxnorm", rxcui,
     matchedName: props.name || null, tty: props.tty || null,
     isBrand: BRAND_TTYS.includes(props.tty)
   };
@@ -138,7 +150,7 @@ async function rxnormLookup(term) {
   if (props.tty === "IN") {
     components = [String(props.name).toLowerCase()];
   } else {
-    const rel = await rx("/rxcui/" + encodeURIComponent(best.rxcui) + "/related.json", { tty: "IN" });
+    const rel = await rx("/rxcui/" + encodeURIComponent(rxcui) + "/related.json", { tty: "IN" });
     const groups = (rel.relatedGroup && rel.relatedGroup.conceptGroup) || [];
     components = [];
     groups.forEach((g) => (g.conceptProperties || []).forEach((c) => {
@@ -148,6 +160,31 @@ async function rxnormLookup(term) {
   }
   if (components.length) Object.assign(result, genericFields(components));
   return result;
+}
+
+async function rxnormLookup(term) {
+  // 1. An exact or normalised name match (brand or ingredient) is trusted.
+  const exact = await rx("/rxcui.json", { name: term, search: 2 });
+  const ids = (exact.idGroup && exact.idGroup.rxnormId) || [];
+  if (ids.length) return conceptResult(ids[0], "good");
+
+  // 2. Otherwise look at the closest few concepts and compare their names with what was written.
+  const approx = await rx("/approximateTerm.json", { term, maxEntries: 4 });
+  const seen = new Set();
+  const candidates = [];
+  ((approx.approximateGroup && approx.approximateGroup.candidate) || []).forEach((c) => {
+    if (c.rxcui && !seen.has(c.rxcui)) { seen.add(c.rxcui); candidates.push(c.rxcui); }
+  });
+
+  let best = null;
+  for (const rxcui of candidates.slice(0, 3)) {
+    const props = (await rx("/rxcui/" + encodeURIComponent(rxcui) + "/properties.json")).properties || {};
+    const m = nameMatch(term, props.name);
+    if (m > 0 && (!best || m > best.m)) best = { rxcui, props, m };
+    if (m === 2) break;
+  }
+  if (!best) return { level: "none", source: "rxnorm" };
+  return conceptResult(best.rxcui, best.m === 2 ? "good" : "weak", best.props);
 }
 
 module.exports = async function handler(req, res) {
