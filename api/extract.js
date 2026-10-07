@@ -48,6 +48,14 @@ function isRateLimited(ip) {
   return rec.count > RATE_MAX;
 }
 
+// While testing, set DEBUG_ERRORS=1 in Vercel to show Google's error text on the page.
+// Remove it afterwards. The text never contains your key, but visitors don't need to see it.
+function debugDetail(status, data) {
+  if (process.env.DEBUG_ERRORS !== "1") return "";
+  const message = (data && data.error && data.error.message) || "no message";
+  return " (Google said " + status + ": " + String(message).slice(0, 300) + ")";
+}
+
 function readBody(req) {
   if (req.body && typeof req.body === "object") return req.body;
   if (typeof req.body === "string") {
@@ -123,7 +131,7 @@ module.exports = async function handler(req, res) {
       if (upstream.status === 429) {
         return res.status(429).json({ error: "The shared Gemini quota is busy right now. Try again in a minute." });
       }
-      return res.status(502).json({ error: "The handwriting reader had a problem. Try again." });
+      return res.status(502).json({ error: "The handwriting reader had a problem. Try again." + debugDetail(upstream.status, data) });
     }
 
     if (data.promptFeedback && data.promptFeedback.blockReason) {
@@ -142,7 +150,7 @@ module.exports = async function handler(req, res) {
       return res.status(504).json({ error: "The handwriting reader took too long. Try again." });
     }
     console.error("extract failed", err && err.message);
-    return res.status(502).json({ error: "Couldn't reach the handwriting reader. Try again." });
+    return res.status(502).json({ error: "Couldn't reach the handwriting reader. Try again." + (process.env.DEBUG_ERRORS === "1" ? " (" + String(err && err.message).slice(0, 200) + ")" : "") });
   } finally {
     clearTimeout(timer);
   }
