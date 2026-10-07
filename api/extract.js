@@ -161,10 +161,18 @@ module.exports = async function handler(req, res) {
     return res.status(405).json({ error: "Use POST." });
   }
 
-  // Optional: only accept requests whose Origin header matches your site.
-  const allowedOrigins = (process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (allowedOrigins.length && !allowedOrigins.includes(req.headers.origin)) {
-    return res.status(403).json({ error: "This origin isn't allowed." });
+  // Browsers send an Origin header with every POST. Accept requests from this site's own address
+  // (so every Vercel address of the project works: production, preview and deployment links)
+  // and from any extra origins listed in ALLOWED_ORIGINS. Other websites' scripts are turned away.
+  // Requests without an Origin header (curl, servers) can't be told apart and are left to the rate limit.
+  const origin = req.headers.origin;
+  if (origin) {
+    const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+    const sameSite = !!host && (origin === "https://" + host || origin === "http://" + host);
+    const extra = (process.env.ALLOWED_ORIGINS || "").split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean);
+    if (!sameSite && !extra.includes(origin)) {
+      return res.status(403).json({ error: "This origin isn't allowed." });
+    }
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
